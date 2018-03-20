@@ -1,8 +1,6 @@
 package com.gouttebessisg;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 import io.vertx.core.AbstractVerticle;
@@ -20,7 +18,6 @@ import io.vertx.ext.sql.UpdateResult;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.ext.web.handler.StaticHandler;
 
 public class MyFirstVerticle extends AbstractVerticle {
 
