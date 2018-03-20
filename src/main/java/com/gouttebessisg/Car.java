@@ -2,6 +2,8 @@ package com.gouttebessisg;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.vertx.core.json.JsonObject;
+
 public class Car {
 
   private static final AtomicInteger COUNTER = new AtomicInteger();
@@ -16,6 +18,18 @@ public class Car {
     this.id = COUNTER.getAndIncrement();
     this.name = name;
     this.color = color;
+  }
+
+  public Car(int id, String name, String color) {
+    this.id = id;
+    this.name = name;
+    this.color = color;
+  }
+
+  public Car(JsonObject json) {
+    this.name = json.getString("NAME");
+    this.color = json.getString("COLOR");
+    this.id = json.getInteger("ID");
   }
 
   public Car() {
