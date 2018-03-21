@@ -12,9 +12,20 @@ import java.io.IOException;
 import java.net.ServerSocket;
 
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import de.flapdoodle.embed.mongo.MongodExecutable;
+import de.flapdoodle.embed.mongo.MongodProcess;
+import de.flapdoodle.embed.mongo.MongodStarter;
+import de.flapdoodle.embed.mongo.config.IMongodConfig;
+import de.flapdoodle.embed.mongo.config.MongodConfigBuilder;
+import de.flapdoodle.embed.mongo.config.Net;
+import de.flapdoodle.embed.mongo.distribution.Version;
+import de.flapdoodle.embed.process.runtime.Network;
 
 @RunWith(VertxUnitRunner.class)
 public class MyFirstVerticleTest {
@@ -36,9 +47,10 @@ public class MyFirstVerticleTest {
 
   DeploymentOptions options = new DeploymentOptions()
         .setConfig(new JsonObject()
-            .put("http.port", port)
-            .put("url", "jdbc:hsqldb:mem:test?shutdown=true")
-            .put("driver_class", "org.hsqldb.jdbcDriver")
+        .put("http.port", port)
+        .put("db_name", "cars-test")
+        .put("connection_string",
+            "mongodb://localhost:" + MONGO_PORT)
         );
      vertx.deployVerticle(MyFirstVerticle.class.getName(), options, context.asyncAssertSuccess());
   }
@@ -83,4 +95,22 @@ public void checkThatWeCanAdd(TestContext context) {
       .write(json)
       .end();
 }
+
+    private static MongodProcess MONGO;
+    private static int MONGO_PORT = 12345;
+
+    @BeforeClass
+    public static void initialize() throws IOException {
+      MongodStarter starter = MongodStarter.getDefaultInstance();
+      IMongodConfig mongodConfig = new MongodConfigBuilder()
+          .version(Version.Main.PRODUCTION)
+          .net(new Net(MONGO_PORT, Network.localhostIsIPv6()))
+          .build();
+      MongodExecutable mongodExecutable =
+            starter.prepare(mongodConfig);
+     MONGO = mongodExecutable.start();
+    } 
+
+    @AfterClass
+    public static void shutdown() {  MONGO.stop(); }
 }

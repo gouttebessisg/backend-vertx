@@ -1,8 +1,5 @@
 package com.gouttebessisg;
 
-import java.util.List;
-import java.util.stream.Collectors;
-
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -10,41 +7,46 @@ import io.vertx.core.Handler;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
-import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.jdbc.JDBCClient;
-import io.vertx.ext.sql.SQLConnection;
-import io.vertx.ext.sql.UpdateResult;
+import io.vertx.ext.mongo.MongoClient;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 
+import java.util.List;
+import java.util.stream.Collectors;
+  
+/**
+ * This is a verticle. A verticle is a _Vert.x component_. This verticle is implemented in Java, but you can
+ * implement them in JavaScript, Groovy or even Ruby.
+ * https://github.com/cescoffier/my-vertx-first-app
+ */
 public class MyFirstVerticle extends AbstractVerticle {
 
-  private JDBCClient jdbc;
-  
+  public static final String COLLECTION = "cars";
+  private MongoClient mongo;
+
+  /**
+   * This method is called when the verticle is deployed. It creates a HTTP server and registers a simple request
+   * handler.
+   * <p/>
+   * Notice the `listen` method. It passes a lambda checking the port binding result. When the HTTP server has been
+   * bound on the port, it call the `complete` method to inform that the starting has completed. Else it reports the
+   * error.
+   *
+   * @param fut the future
+   */
   @Override
   public void start(Future<Void> fut) {
 
-    // Create a JDBC client
-    jdbc = JDBCClient.createShared(vertx, config(), "My-Cars-Collection");
+    // Create a Mongo client
+    mongo = MongoClient.createShared(vertx, config());
 
-    startBackend(
-        (connection) -> createSomeData(connection,
-            (nothing) -> startWebApp(
-                (http) -> completeStartup(http, fut)
-            ), fut
+
+    createSomeData(
+        (nothing) -> startWebApp(
+            (http) -> completeStartup(http, fut)
         ), fut);
-  }
-
-  private void startBackend(Handler<AsyncResult<SQLConnection>> next, Future<Void> fut) {
-    jdbc.getConnection(ar -> {
-      if (ar.failed()) {
-        fut.fail(ar.cause());
-      } else {
-        next.handle(Future.succeededFuture(ar.result()));
-      }
-    });
   }
 
   private void startWebApp(Handler<AsyncResult<HttpServer>> next) {
@@ -75,7 +77,7 @@ public class MyFirstVerticle extends AbstractVerticle {
             // Retrieve the port from the configuration,
             // default to 8080.
             config().getInteger("http.port", 8080),
-            next::handle
+            next
         );
   }
 
@@ -89,25 +91,19 @@ public class MyFirstVerticle extends AbstractVerticle {
 
 
   @Override
-  public void stop() throws Exception {
-    // Close the JDBC client.
-    jdbc.close();
+  public void stop() {
+    mongo.close();
   }
 
   private void addOne(RoutingContext routingContext) {
-    jdbc.getConnection(ar -> {
-      // Read the request's content and create an instance of Car.
-      final Car car = Json.decodeValue(routingContext.getBodyAsString(),
-      Car.class);
-      SQLConnection connection = ar.result();
-      insert(car, connection, (r) ->
-          routingContext.response()
-              .setStatusCode(201)
-              .putHeader("content-type", "application/json; charset=utf-8")
-              .end(Json.encodePrettily(r.result())));
-          connection.close();
-    });
+    final Car car = Json.decodeValue(routingContext.getBodyAsString(),
+        Car.class);
 
+    mongo.insert(COLLECTION, car.toJson(), r ->
+        routingContext.response()
+            .setStatusCode(201)
+            .putHeader("content-type", "application/json; charset=utf-8")
+            .end(Json.encodePrettily(car.setId(r.result()))));
   }
 
   private void getOne(RoutingContext routingContext) {
@@ -115,21 +111,20 @@ public class MyFirstVerticle extends AbstractVerticle {
     if (id == null) {
       routingContext.response().setStatusCode(400).end();
     } else {
-      jdbc.getConnection(ar -> {
-        // Read the request's content and create an instance of Car.
-        SQLConnection connection = ar.result();
-        select(id, connection, result -> {
-          if (result.succeeded()) {
-            routingContext.response()
-                .setStatusCode(200)
-                .putHeader("content-type", "application/json; charset=utf-8")
-                .end(Json.encodePrettily(result.result()));
-          } else {
-            routingContext.response()
-                .setStatusCode(404).end();
+      mongo.findOne(COLLECTION, new JsonObject().put("_id", id), null, ar -> {
+        if (ar.succeeded()) {
+          if (ar.result() == null) {
+            routingContext.response().setStatusCode(404).end();
+            return;
           }
-          connection.close();
-        });
+          Car car = new Car(ar.result());
+          routingContext.response()
+              .setStatusCode(200)
+              .putHeader("content-type", "application/json; charset=utf-8")
+              .end(Json.encodePrettily(car));
+        } else {
+          routingContext.response().setStatusCode(404).end();
+        }
       });
     }
   }
@@ -140,18 +135,20 @@ public class MyFirstVerticle extends AbstractVerticle {
     if (id == null || json == null) {
       routingContext.response().setStatusCode(400).end();
     } else {
-      jdbc.getConnection(ar ->
-          update(id, json, ar.result(), (car) -> {
-            if (car.failed()) {
+      mongo.update(COLLECTION,
+          new JsonObject().put("_id", id), // Select a unique document
+          // The update syntax: {$set, the json object containing the fields to update}
+          new JsonObject()
+              .put("$set", json),
+          v -> {
+            if (v.failed()) {
               routingContext.response().setStatusCode(404).end();
             } else {
               routingContext.response()
                   .putHeader("content-type", "application/json; charset=utf-8")
-                  .end(Json.encodePrettily(car.result()));
+                  .end(Json.encodePrettily(new Car(id, json.getString("name"), json.getString("color"))));
             }
-            ar.result().close();
-          })
-      );
+          });
     }
   }
 
@@ -160,117 +157,51 @@ public class MyFirstVerticle extends AbstractVerticle {
     if (id == null) {
       routingContext.response().setStatusCode(400).end();
     } else {
-      jdbc.getConnection(ar -> {
-        SQLConnection connection = ar.result();
-        connection.execute("DELETE FROM Car WHERE id='" + id + "'",
-            result -> {
-              routingContext.response().setStatusCode(204).end();
-              connection.close();
-            });
-      });
+      mongo.removeOne(COLLECTION, new JsonObject().put("_id", id),
+          ar -> routingContext.response().setStatusCode(204).end());
     }
   }
 
   private void getAll(RoutingContext routingContext) {
-    jdbc.getConnection(ar -> {
-      SQLConnection connection = ar.result();
-      connection.query("SELECT * FROM Car", result -> {
-        List<Car> cars = result.result().getRows().stream().map(Car::new).collect(Collectors.toList());
-        routingContext.response()
-            .putHeader("content-type", "application/json; charset=utf-8")
-            .end(Json.encodePrettily(cars));
-        connection.close();
-      });
+    mongo.find(COLLECTION, new JsonObject(), results -> {
+      List<JsonObject> objects = results.result();
+      List<Car> cars = objects.stream().map(Car::new).collect(Collectors.toList());
+      routingContext.response()
+          .putHeader("content-type", "application/json; charset=utf-8")
+          .end(Json.encodePrettily(cars));
     });
   }
 
-  private void createSomeData(AsyncResult<SQLConnection> result, Handler<AsyncResult<Void>> next, Future<Void> fut) {
-    if (result.failed()) {
-      fut.fail(result.cause());
-    } else {
-      SQLConnection connection = result.result();
-      connection.execute(
-          "CREATE TABLE IF NOT EXISTS Car (id INTEGER IDENTITY, name varchar(100), color varchar" +
-              "(100))",
-          ar -> {
+  private void createSomeData(Handler<AsyncResult<Void>> next, Future<Void> fut) {
+    Car c1 = new Car("Renault Clio", "Blue");
+    Car c2 = new Car("Peugeot 207", "Red");
+    System.out.println(c1.toJson());
+
+    // Do we have data in the collection ?
+    mongo.count(COLLECTION, new JsonObject(), count -> {
+      if (count.succeeded()) {
+        if (count.result() == 0) {
+          // no whiskies, insert data
+          mongo.insert(COLLECTION, c1.toJson(), ar -> {
             if (ar.failed()) {
               fut.fail(ar.cause());
-              connection.close();
-              return;
+            } else {
+              mongo.insert(COLLECTION, c2.toJson(), ar2 -> {
+                if (ar2.failed()) {
+                  fut.fail(ar2.cause());
+                } else {
+                  next.handle(Future.succeededFuture());
+                }
+              });
             }
-            connection.query("SELECT * FROM Car", select -> {
-              if (select.failed()) {
-                fut.fail(select.cause());
-                connection.close();
-                return;
-              }
-              if (select.result().getNumRows() == 0) {
-                insert(
-                    new Car("Peugeot 207", "Blue"), connection,
-                    (v) -> insert(new Car("Renault Clio", "Red"), connection,
-                        (r) -> {
-                          next.handle(Future.<Void>succeededFuture());
-                          connection.close();
-                        }));
-              } else {
-                next.handle(Future.<Void>succeededFuture());
-                connection.close();
-              }
-            });
-
           });
-    }
-  }
-
-  private void insert(Car car, SQLConnection connection, Handler<AsyncResult<Car>> next) {
-    String sql = "INSERT INTO Car (name, color) VALUES ?, ?";
-    connection.updateWithParams(sql,
-        new JsonArray().add(car.getName()).add(car.getColor()),
-        (ar) -> {
-          if (ar.failed()) {
-            next.handle(Future.failedFuture(ar.cause()));
-            connection.close();
-            return;
-          }
-          UpdateResult result = ar.result();
-          // Build a new car instance with the generated id.
-          Car w = new Car(result.getKeys().getInteger(0), car.getName(), car.getColor());
-          next.handle(Future.succeededFuture(w));
-        });
-  }
-
-  private void select(String id, SQLConnection connection, Handler<AsyncResult<Car>> resultHandler) {
-    connection.queryWithParams("SELECT * FROM Car WHERE id=?", new JsonArray().add(id), ar -> {
-      if (ar.failed()) {
-        resultHandler.handle(Future.failedFuture("Car not found"));
-      } else {
-        if (ar.result().getNumRows() >= 1) {
-          resultHandler.handle(Future.succeededFuture(new Car(ar.result().getRows().get(0))));
         } else {
-          resultHandler.handle(Future.failedFuture("Car not found"));
+          next.handle(Future.succeededFuture());
         }
+      } else {
+        // report the error
+        fut.fail(count.cause());
       }
     });
   }
-
-  private void update(String id, JsonObject content, SQLConnection connection,
-                      Handler<AsyncResult<Car>> resultHandler) {
-    String sql = "UPDATE Car SET name=?, color=? WHERE id=?";
-    connection.updateWithParams(sql,
-        new JsonArray().add(content.getString("name")).add(content.getString("color")).add(id),
-        update -> {
-          if (update.failed()) {
-            resultHandler.handle(Future.failedFuture("Cannot update the car"));
-            return;
-          }
-          if (update.result().getUpdated() == 0) {
-            resultHandler.handle(Future.failedFuture("Car not found"));
-            return;
-          }
-          resultHandler.handle(
-              Future.succeededFuture(new Car(Integer.valueOf(id),
-                  content.getString("name"), content.getString("color"))));
-        });
-  }
-
 }
